@@ -1,4 +1,5 @@
 name: Daily Trend Tracker
+
 on:
   schedule:
     - cron: '0 0 * * *'  # UTC 00:00 = 台灣 08:00
