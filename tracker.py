@@ -1,7 +1,9 @@
 """瑀墨趨勢追蹤器 — 每日搜尋裝潢/油漆相關高流量短影音，推播至 Telegram"""
 import os
+import json
 import httpx
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 YOUTUBE_API_KEY = os.environ["YOUTUBE_API_KEY"]
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -18,6 +20,22 @@ YOUTUBE_VIDEOS_URL = "https://www.googleapis.com/youtube/v3/videos"
 TELEGRAM_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
 
 TW = timezone(timedelta(hours=8))
+HISTORY_FILE = Path(__file__).parent / "sent_history.json"
+DEDUP_DAYS = 3
+
+
+def load_history() -> dict:
+    """載入已發送紀錄，格式: {video_id: "2026-04-02", ...}"""
+    if HISTORY_FILE.exists():
+        return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_history(history: dict):
+    """儲存已發送紀錄，清除超過 DEDUP_DAYS 的舊紀錄"""
+    cutoff = (datetime.now(TW) - timedelta(days=DEDUP_DAYS)).strftime("%Y-%m-%d")
+    cleaned = {vid: date for vid, date in history.items() if date >= cutoff}
+    HISTORY_FILE.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def search_videos(client: httpx.Client, keyword: str, published_after: str) -> list[dict]:
@@ -98,7 +116,10 @@ def send_telegram(message: str):
 def main():
     now = datetime.now(TW)
     today = now.strftime("%Y/%m/%d")
+    today_key = now.strftime("%Y-%m-%d")
     published_after = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    history = load_history()
 
     # 搜尋所有關鍵字
     all_videos: dict[str, dict] = {}  # video_id → info
@@ -106,7 +127,7 @@ def main():
         for kw in KEYWORDS:
             for v in search_videos(client, kw, published_after):
                 vid = v["video_id"]
-                if vid not in all_videos:
+                if vid not in all_videos and vid not in history:
                     all_videos[vid] = v
 
         # 批次取得觀看數
@@ -119,12 +140,17 @@ def main():
     top10 = sorted(all_videos.values(), key=lambda x: x["views"], reverse=True)[:10]
 
     if not top10:
-        send_telegram(f"🎨 瑀墨趨勢日報 — {today}\n\n⚠️ 今日無符合條件的短影音")
+        send_telegram(f"🎨 瑀墨趨勢日報 — {today}\n\n⚠️ 今日無新影片（近 3 天已推播的不重複顯示）")
         return
+
+    # 記錄本次發送的 video_id
+    for v in top10:
+        history[v["video_id"]] = today_key
+    save_history(history)
 
     message = build_message(top10, today)
     send_telegram(message)
-    print(f"✅ 已推播 {len(top10)} 部影片")
+    print(f"✅ 已推播 {len(top10)} 部影片（已排除 {len(history) - len(top10)} 部近期重複）")
 
 
 if __name__ == "__main__":
