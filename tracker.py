@@ -89,9 +89,10 @@ def build_message(top_videos: list[dict], today: str) -> str:
     ]
     for i, v in enumerate(top_videos, 1):
         views = f"{v['views']:,}"
+        repeat_tag = f"  🔄 曾於 {v['repeat']} 推播" if v.get("repeat") else "  🆕"
         lines.append(f"📹 #{i} {v['title']}")
         lines.append(f"   👤 {v['channel']}")
-        lines.append(f"   👁 {views} 次觀看")
+        lines.append(f"   👁 {views} 次觀看{repeat_tag}")
         lines.append(f"   🔑 關鍵字：{v['keyword']}")
         lines.append(f"   🔗 https://youtube.com/shorts/{v['video_id']}")
         lines.append("")
@@ -127,25 +128,30 @@ def main():
         for kw in KEYWORDS:
             for v in search_videos(client, kw, published_after):
                 vid = v["video_id"]
-                if vid not in all_videos and vid not in history:
+                if vid not in all_videos:
+                    v["repeat"] = history.get(vid)  # None=新片, "2026-04-01"=曾推播日期
                     all_videos[vid] = v
 
         # 批次取得觀看數
         view_counts = get_view_counts(client, list(all_videos.keys()))
 
-    # 補上觀看數，按觀看數排序取 Top 10
+    # 補上觀看數，排序：新片優先，同組內按觀看數排
     for vid, info in all_videos.items():
         info["views"] = view_counts.get(vid, 0)
 
-    top10 = sorted(all_videos.values(), key=lambda x: x["views"], reverse=True)[:10]
+    top10 = sorted(
+        all_videos.values(),
+        key=lambda x: (x["repeat"] is not None, -x["views"]),
+    )[:10]
 
     if not top10:
-        send_telegram(f"🎨 瑀墨趨勢日報 — {today}\n\n⚠️ 今日無新影片（近 3 天已推播的不重複顯示）")
+        send_telegram(f"🎨 瑀墨趨勢日報 — {today}\n\n⚠️ 今日無符合條件的短影音")
         return
 
     # 記錄本次發送的 video_id
     for v in top10:
-        history[v["video_id"]] = today_key
+        if not v["repeat"]:
+            history[v["video_id"]] = today_key
     save_history(history)
 
     message = build_message(top10, today)
